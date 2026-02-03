@@ -79,22 +79,14 @@ After=network.target
 [Service]
 Type=simple
 User=root
-Restart=always
-RestartSec=60
-# Load config specific to the GPU index
+# We use EnvironmentFile to load your specific settings
 EnvironmentFile=/etc/conf.d/nvidia_oc_%i
 
-# Enable persistence mode for this specific GPU
+# Enable persistence mode
 ExecStartPre=/usr/bin/nvidia-smi -i %i -pm 1
 
-# Apply settings using the index from the service name (%i)
-ExecStart=/usr/bin/nvidia_oc set \\
-    --index %i \\
-    --power-limit \${NV_POWER_LIMIT} \\
-    --freq-offset \${NV_CORE_OFFSET} \\
-    --mem-offset \${NV_MEM_OFFSET} \\
-    --min-clock 0 \\
-    --max-clock \${NV_MAX_CLOCK}
+# Single-line bash execution to avoid quoting/backslash errors in Systemd
+ExecStart=/bin/bash -c 'FLAGS="--index %i --power-limit \${NV_POWER_LIMIT} --freq-offset \${NV_CORE_OFFSET} --mem-offset \${NV_MEM_OFFSET}"; if [ -n "\${NV_MAX_CLOCK}" ] && [ "\${NV_MAX_CLOCK}" != "0" ]; then FLAGS="\$FLAGS --min-clock 0 --max-clock \${NV_MAX_CLOCK}"; fi; exec /usr/bin/nvidia_oc set \$FLAGS'
 
 [Install]
 WantedBy=multi-user.target
@@ -159,6 +151,13 @@ configure_gpu() {
     if [ -z "$MAX_CORE" ]; then read -p "Enter Core Max clock (MHz) [Default: 0]: " MAX_CORE; fi
     MAX_CORE="${MAX_CORE:-0}"
 
+    if [[ "$MAX_CORE" == "0" || -z "$MAX_CORE" ]]; then
+        MAX_CORE=""
+        echo -e "${YELLOW}Max Clock limit skipped.${NC}"
+    else
+        echo -e "${GREEN}Max Clock limit set to ${MAX_CORE}MHz (Min Clock auto-set to 0).${NC}"
+    fi
+
     # Confirmation
     echo -e "${YELLOW}Settings for GPU $IDX:${NC}"
     echo "  Core:  $CORE MHz"
@@ -176,9 +175,9 @@ configure_gpu() {
     echo -e "${BLUE}Writing config to ${CONF_FILE}...${NC}"
     cat <<EOF > "$CONF_FILE"
 # Configuration for nvidia_oc@${IDX}.service
-NV_CORE_OFFSET=${CORE}
-NV_MEM_OFFSET=${MEM}
-NV_POWER_LIMIT=${PWR_MW}
+NV_CORE_OFFSET=${CORE:-0}
+NV_MEM_OFFSET=${MEM:-0}
+NV_POWER_LIMIT=${PWR_MW:-0}
 NV_MAX_CLOCK=${MAX_CORE}
 EOF
 
