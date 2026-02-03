@@ -9,6 +9,7 @@ CLI_INDEX=""
 CLI_CORE=""
 CLI_MEM=""
 CLI_POWER=""
+CLI_MAX_CLOCK=""
 NON_INTERACTIVE=false
 
 # ANSI Colors
@@ -41,6 +42,7 @@ usage() {
     echo "  --core <MHz>      Core clock offset"
     echo "  --mem <MHz>       Memory clock offset"
     echo "  --power <Watts>   Power limit in WATTS"
+    echo "  --max-clock <MHz>   Max core clock"
     echo "  -y, --yes         Skip confirmation (requires all CLI args)"
     echo "  -h, --help        Show this help message"
     exit 1
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         --core)  CLI_CORE="$2"; shift 2 ;;
         --mem)   CLI_MEM="$2"; shift 2 ;;
         --power) CLI_POWER="$2"; shift 2 ;;
+        --max-clock) CLI_MAX_CLOCK="$2"; shift 2 ;;
         -y|--yes) NON_INTERACTIVE=true; shift ;;
         -h|--help) usage ;;
         *) echo -e "${RED}Unknown option: $1${NC}"; usage ;;
@@ -89,7 +92,9 @@ ExecStart=/usr/bin/nvidia_oc set \\
     --index %i \\
     --power-limit \${NV_POWER_LIMIT} \\
     --freq-offset \${NV_CORE_OFFSET} \\
-    --mem-offset \${NV_MEM_OFFSET}
+    --mem-offset \${NV_MEM_OFFSET} \\
+    --min-clock 0 \\
+    --max-clock \${NV_MAX_CLOCK}
 
 [Install]
 WantedBy=multi-user.target
@@ -127,7 +132,8 @@ configure_gpu() {
     local CORE=$2
     local MEM=$3
     local PWR=$4
-    local INTERACTIVE=$5
+    local MAX_CORE=$5
+    local INTERACTIVE=$6
 
     echo -e "\n${BLUE}=== Configuring GPU Index: $IDX ===${NC}"
 
@@ -150,11 +156,15 @@ configure_gpu() {
     # Calc mW
     local PWR_MW=$((PWR * 1000))
 
+    if [ -z "$MAX_CORE" ]; then read -p "Enter Core Max clock (MHz) [Default: 0]: " MAX_CORE; fi
+    MAX_CORE="${MAX_CORE:-0}"
+
     # Confirmation
     echo -e "${YELLOW}Settings for GPU $IDX:${NC}"
     echo "  Core:  $CORE MHz"
     echo "  Mem:   $MEM MHz"
     echo "  Power: $PWR W ($PWR_MW mW)"
+    echo "  Max clock: $MAX_CORE MHz"
 
     if [ "$INTERACTIVE" = true ]; then
         read -p "Apply and enable service? [y/N] " confirm
@@ -169,6 +179,7 @@ configure_gpu() {
 NV_CORE_OFFSET=${CORE}
 NV_MEM_OFFSET=${MEM}
 NV_POWER_LIMIT=${PWR_MW}
+NV_MAX_CLOCK=${MAX_CORE}
 EOF
 
     # Enable and Restart specific service
@@ -190,7 +201,7 @@ EOF
 
 # If CLI arguments were provided for a specific index, just run that once
 if [ -n "$CLI_INDEX" ]; then
-    configure_gpu "$CLI_INDEX" "$CLI_CORE" "$CLI_MEM" "$CLI_POWER" "$(! $NON_INTERACTIVE)"
+    configure_gpu "$CLI_INDEX" "$CLI_CORE" "$CLI_MEM" "$CLI_POWER" "$CLI_MAX_CLOCK" "$(! $NON_INTERACTIVE)"
     exit 0
 fi
 
@@ -205,7 +216,7 @@ while true; do
 
     if [[ -z "$input" ]]; then continue; fi
 
-    configure_gpu "$input" "" "" "" true
+    configure_gpu "$input" "" "" "" "" true
 done
 
 echo -e "${GREEN}All done.${NC}"
