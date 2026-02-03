@@ -109,9 +109,9 @@ if ! command -v nvidia_oc &> /dev/null; then
     fi
     echo -e "${BLUE}Installing 'nvidia_oc' as user '$REAL_USER'...${NC}"
     if command -v yay &> /dev/null; then
-        sudo -u "$REAL_USER" yay -S --noconfirm nvidia_oc
+        sudo -u "$REAL_USER" yay -S --noconfirm nvidia_oc-bin
     elif command -v paru &> /dev/null; then
-        sudo -u "$REAL_USER" paru -S --noconfirm nvidia_oc
+        sudo -u "$REAL_USER" paru -S --noconfirm nvidia_oc-bin
     else
         echo -e "${RED}Error: No AUR helper found.${NC}"
         exit 1
