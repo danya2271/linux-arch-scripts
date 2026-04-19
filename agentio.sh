@@ -7,8 +7,11 @@
 AGENT_DIR="$HOME/.agentio"
 MODELS_DIR="$AGENT_DIR/models"
 LLAMA_DIR="$AGENT_DIR/llama.cpp"
-PID_FILE="$AGENT_DIR/server.pid"
-LOG_FILE="$AGENT_DIR/server.log"
+
+# Systemd specific variables
+SYSTEMD_DIR="$HOME/.config/systemd/user"
+SERVICE_NAME="agentio.service"
+SERVICE_FILE="$SYSTEMD_DIR/$SERVICE_NAME"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -18,6 +21,7 @@ NC='\033[0m' # No Color
 
 # Ensure directories exist from the start
 mkdir -p "$MODELS_DIR"
+mkdir -p "$SYSTEMD_DIR"
 
 # ------------------------------------------------------------------------------
 # 1. Setup & Installation
@@ -83,7 +87,7 @@ setup() {
 }
 
 # ------------------------------------------------------------------------------
-# 2. Server Management
+# 2. Server Management (Systemd)
 # ------------------------------------------------------------------------------
 
 get_server_binary() {
@@ -103,14 +107,15 @@ get_server_binary() {
 
 start_server() {
     if [ -z "$1" ]; then
-        echo "Usage: agentio start <filename.gguf> [context_size] [gpu_layers]"
-        echo "Example (For RTX 4060): agentio start omnicoder-9b.gguf 4096 24"
+        echo "Usage: agentio start <filename.gguf> [context_size] [gpu_layers] [api_key]"
+        echo "Example: agentio start omnicoder-9b.gguf 4096 24 my_secret_key"
         exit 1
     fi
 
     MODEL_PATH="$MODELS_DIR/$1"
     CTX="${2:-4096}"
-    NGL="${3:-99}" # 99 = Full GPU. Lower this if you run out of VRAM (e.g., 24)
+    NGL="${3:-99}"
+    API_KEY="$4"
 
     if [ ! -f "$MODEL_PATH" ]; then
         echo -e "${RED}Model not found: $MODEL_PATH${NC}"
@@ -123,46 +128,75 @@ start_server() {
         exit 1
     fi
 
-    stop_server > /dev/null 2>&1
-
-    echo -e "${BLUE}Starting model $1 (Context: $CTX | GPU Layers: $NGL)...${NC}"
-
-    nohup "$SERVER_BIN" -m "$MODEL_PATH" -c "$CTX" -ngl "$NGL" --port 8080 > "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
-
-    # Wait 3 seconds and check if the process is still alive. If not, it crashed.
-    sleep 3
-    if ! ps -p $(cat "$PID_FILE") > /dev/null; then
-        echo -e "${RED}Server crashed! Likely Out of Memory. Check logs:${NC}"
-        tail -n 10 "$LOG_FILE"
-        rm "$PID_FILE"
-        exit 1
+    API_KEY_FLAG=""
+    if [ -n "$API_KEY" ]; then
+        API_KEY_FLAG="--api-key $API_KEY"
     fi
 
-    echo -e "${GREEN}Server successfully started on port 8080! (PID: $(cat "$PID_FILE"))${NC}"
+    echo -e "${BLUE}Configuring Systemd service for $1...${NC}"
+
+    # Dynamically generate the systemd service file
+    cat <<EOF > "$SERVICE_FILE"
+[Unit]
+Description=AgentIO Local LLM Server (llama.cpp)
+After=network.target
+
+[Service]
+Type=simple
+Environment="PATH=/opt/cuda/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=$SERVER_BIN -m "$MODEL_PATH" -c "$CTX" -ngl "$NGL" --port 8080 $API_KEY_FLAG
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+EOF
+
+    # Reload systemd, stop existing service, and start the new one
+    systemctl --user daemon-reload
+    systemctl --user stop "$SERVICE_NAME" 2>/dev/null
+    systemctl --user start "$SERVICE_NAME"
+    systemctl --user enable "$SERVICE_NAME" > /dev/null 2>&1
+
+    # Check if the process started successfully
+    sleep 2
+    if systemctl --user is-active --quiet "$SERVICE_NAME"; then
+        echo -e "${GREEN}Server successfully started on port 8080 via Systemd!${NC}"
+        if [ -n "$API_KEY" ]; then
+            echo -e "${YELLOW}API Key protection is ENABLED.${NC}"
+        fi
+        echo -e "To view live logs, run: ${BLUE}agentio logs${NC}"
+    else
+        echo -e "${RED}Server crashed or failed to start. Check logs:${NC}"
+        systemctl --user status "$SERVICE_NAME" --no-pager
+        exit 1
+    fi
 }
 
 stop_server() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null; then
-            kill "$PID"
-            echo -e "${YELLOW}Server stopped.${NC}"
-        else
-            echo -e "${YELLOW}Server was not running.${NC}"
-        fi
-        rm "$PID_FILE"
+    if systemctl --user is-active --quiet "$SERVICE_NAME"; then
+        systemctl --user stop "$SERVICE_NAME"
+        systemctl --user disable "$SERVICE_NAME" > /dev/null 2>&1
+        echo -e "${YELLOW}Systemd server stopped.${NC}"
     else
-        pkill -f llama-server && echo -e "${YELLOW}Server processes terminated.${NC}" || echo "No server running."
+        echo -e "${YELLOW}Server was not running.${NC}"
     fi
 }
 
 status_server() {
-    if [ -f "$PID_FILE" ] && ps -p "$(cat "$PID_FILE")" > /dev/null; then
-        echo -e "${GREEN}Server is RUNNING (PID: $(cat "$PID_FILE"))${NC}"
+    if systemctl --user is-active --quiet "$SERVICE_NAME"; then
+        echo -e "${GREEN}Server is RUNNING.${NC}"
+        systemctl --user status "$SERVICE_NAME" --no-pager | head -n 5
     else
         echo -e "${RED}Server is STOPPED.${NC}"
     fi
+}
+
+logs_server() {
+    echo -e "${BLUE}Following server logs (Press Ctrl+C to exit)...${NC}"
+    journalctl --user -u "$SERVICE_NAME" -f
 }
 
 # ------------------------------------------------------------------------------
@@ -191,19 +225,22 @@ list_models() {
 case "$1" in
     install|setup|update) setup ;;
     download) download_model "$2" "$3" ;;
-    start) start_server "$2" "$3" "$4" ;;
+    start) start_server "$2" "$3" "$4" "$5" ;;
     stop) stop_server ;;
     status) status_server ;;
+    logs) logs_server ;;
     list) list_models ;;
     *)
-        echo -e "${BLUE}AgentIO - Local LLM Manager${NC}"
+        echo -e "${BLUE}AgentIO - Local LLM Manager (Systemd Edition)${NC}"
         echo "Commands:"
-        echo "  install / update                     - Compile latest llama.cpp with CUDA support"
-        echo "  download <url> <name.gguf>           - Download a model"
-        echo "  start <name.gguf> [context] [layers] - Start local LLM (e.g. start model.gguf 4096 24)"
-        echo "  stop                                 - Stop local LLM"
-        echo "  status                               - Check if running"
-        echo "  list                                 - List downloaded models"
-        echo "  help                                 - Show this message"
+        echo "  install / update                               - Compile latest llama.cpp with CUDA support"
+        echo "  download <url> <name.gguf>                     - Download a model"
+        echo "  start <name.gguf> [context] [layers] [api_key] - Start LLM Systemd service"
+        echo "                                                   (e.g. start model.gguf 4096 99 my_secret_key)"
+        echo "  stop                                           - Stop LLM Systemd service"
+        echo "  status                                         - Check if service is running"
+        echo "  logs                                           - View live server logs (journalctl)"
+        echo "  list                                           - List downloaded models"
+        echo "  help                                           - Show this message"
         ;;
 esac
