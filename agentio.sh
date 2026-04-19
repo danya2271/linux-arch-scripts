@@ -48,7 +48,7 @@ install_dependencies() {
 build_llamacpp() {
     echo -e "${BLUE}Pulling the latest llama.cpp from GitHub...${NC}"
     if [ ! -d "$LLAMA_DIR" ]; then
-        git clone https://github.com/ggerganov/llama.cpp "$LLAMA_DIR"
+        git clone https://github.com/ggerganov/llama.cpp "$LLAMA_DIR" --depth=1
     else
         cd "$LLAMA_DIR" && git pull
     fi
