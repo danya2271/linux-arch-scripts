@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Ensure script is run as root
-if [ "$EUID" -ne 0 ]; then
-  echo "Please run as root (sudo ./vds-opt.sh)"
-  exit 1
-fi
+# # Ensure script is run as root
+# if [ "$EUID" -ne 0 ]; then
+#   echo "Please run as root (sudo ./vds-opt.sh)"
+#   exit 1
+# fi
 
 echo "🚀 Optimizing VDS for Xray/VLESS..."
 
