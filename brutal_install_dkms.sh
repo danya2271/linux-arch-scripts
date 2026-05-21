@@ -64,8 +64,8 @@ mktemp() {
 }
 
 tput() {
-  if has_command tput; then
-    command tput "$@"
+  if [[ -n "$TERM" ]] && has_command tput; then
+    command tput "$@" 2>/dev/null
   fi
 }
 
