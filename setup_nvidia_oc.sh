@@ -74,10 +74,11 @@ echo -e "${BLUE}Updating systemd template unit at ${TEMPLATE_FILE}...${NC}"
 cat <<EOF > "$TEMPLATE_FILE"
 [Unit]
 Description=NVIDIA Overclocking Service for GPU %i
-After=network.target
+After=systemd-modules-load.service multi-user.target display-manager.service
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 User=root
 # We use EnvironmentFile to load your specific settings
 EnvironmentFile=/etc/conf.d/nvidia_oc_%i
