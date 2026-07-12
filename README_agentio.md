@@ -1,124 +1,117 @@
-Of course. Here is a complete `README.md` file for the `agentio` script. This is formatted in Markdown, which is perfect for platforms like GitHub or for just keeping alongside the script file.
+# AgentIO
 
----
+AgentIO builds `llama.cpp`, manages downloaded GGUF models, and runs one selected
+model as a user systemd service. Its model and performance settings are
+persistent, so normal use is simply:
 
-# AgentIO: Local LLM Manager for Android Studio
-
-AgentIO is a command-line utility designed to simplify the setup and management of local Large Language Models (LLMs) for use with Android Studio on Linux. It automates the entire process, from compiling `llama.cpp` with GPU acceleration to managing models and running the server.
-
-This script is specifically tailored for Arch Linux, Ubuntu, and Debian-based systems with an NVIDIA GPU.
-
-## Features
-
--   **Automated Setup**: Installs all necessary dependencies for your distribution (Arch/Ubuntu/Debian).
--   **Bleeding-Edge `llama.cpp`**: Downloads and compiles the absolute latest version of `llama.cpp` from source, ensuring support for new model architectures.
--   **GPU Acceleration**: Automatically detects your NVIDIA CUDA toolkit and builds `llama.cpp` with full GPU offloading support for maximum performance.
--   **Global Command**: Installs itself as a global `agentio` command, accessible from anywhere in your terminal.
--   **Simple Model Management**: Provides easy commands to download, list, start, and stop your LLM server.
--   **VRAM-Aware**: Allows precise control over context size and the number of model layers offloaded to the GPU, preventing "Out of Memory" errors.
-
-## Prerequisites
-
--   A Linux distribution (tested on Arch Linux, Ubuntu 22.04+).
--   An NVIDIA GPU with the appropriate drivers and CUDA toolkit installed.
--   `sudo` or root access for installing dependencies.
--   An internet connection for downloading source code and models.
-
-## Installation
-
-1.  **Save the Script**: Download or copy the `agentio` script to a file on your system. For example, save it as `~/agentio`.
-
-2.  **Make it Executable**: Open a terminal and run the following command:
-    ```bash
-    chmod +x ~/agentio
-    ```
-
-3.  **Run the Installer**: Execute the script with the `install` command. This will install system dependencies, compile `llama.cpp`, and copy the script to `/usr/local/bin/agentio` for global access.
-    ```bash
-    ~/agentio install
-    ```
-    This process will take a few minutes as it compiles `llama.cpp`. After it's done, you can use the `agentio` command from anywhere.
-
-## Usage
-
-### 1. Downloading a Model
-
-First, you need a model in GGUF format. You can find many on Hugging Face.
-
-**Example: Download OmniCoder-9B**
 ```bash
-agentio download https://huggingface.co/bartowski/OmniCoder-9B-GGUF/resolve/main/OmniCoder-9B-Q4_K_M.gguf omnicoder-9b.gguf
-```
-
-### 2. Starting the LLM Server
-
-The `start` command takes up to three arguments:
-`agentio start <model_name.gguf> [context_size] [gpu_layers]`
-
--   **`model_name.gguf`**: (Required) The name of the model file you downloaded.
--   **`[context_size]`**: (Optional) The context window size. Defaults to `4096`. Larger values require more VRAM.
--   **`[gpu_layers]`**: (Optional) The number of model layers to offload to the GPU. Defaults to `99` (all layers). **This is the most important setting for VRAM management.**
-
-**Recommended command for RTX 4060:**
-```bash
-agentio start omnicoder-9b.gguf 32768 20
-```
-
-### 3. Checking Server Status
-
-To see if the server is running, use:
-```bash
-agentio status
-```
-> **Output:** `Server is RUNNING (PID: 12345)` or `Server is STOPPED.`
-
-### 4. Stopping the Server
-
-To stop the background server process, run:
-```bash
+agentio start
 agentio stop
 ```
 
-### 5. Listing Downloaded Models
+## Install
 
-To see all the models you have downloaded into the `~/.agentio/models` directory:
+```bash
+chmod +x agentio.sh
+./agentio.sh install
+```
+
+The installer builds the latest `llama.cpp` (with CUDA when detected) and
+installs the command as `/usr/local/bin/agentio`.
+
+## Models
+
+Download a model:
+
+```bash
+agentio download \
+  https://huggingface.co/example/model/resolve/main/model.Q4_K_M.gguf \
+  model.Q4_K_M.gguf
+```
+
+Downloads are resumable and use a `.part` file until complete. List every GGUF
+file, including models in subdirectories and names containing spaces:
+
 ```bash
 agentio list
 ```
 
-### 6. Updating `llama.cpp`
+Select a model once:
 
-If a new model architecture is released that `llama.cpp` doesn't support, you can easily pull the latest updates and recompile:
 ```bash
-agentio update
+agentio settings set model model.Q4_K_M.gguf
 ```
 
-## Connecting to Android Studio
+For convenience, `agentio start model.Q4_K_M.gguf` also selects and saves that
+model before starting it.
 
-Once the server is running (`agentio status` shows RUNNING), you can connect your IDE.
+## Persistent settings
 
-1.  In Android Studio, go to **Settings** -> **Tools** -> **AI** -> **Model Providers**.
-2.  Click on the **llama.cpp** provider in the list.
-3.  Ensure the **Port** is set to `8080`.
-4.  Click the blue **Refresh** button on the right.
-5.  The "Available models" dropdown should now populate with the name of your model. Select it.
-6.  Click **Apply** or **OK**.
+Show all current settings and optimization switches:
 
-You can now use Android Studio's built-in AI features, powered entirely by your local GPU!
+```bash
+agentio settings
+```
 
-## Troubleshooting
+Settings are stored in `~/.config/agentio/settings.conf`. Changing a setting
+automatically regenerates and restarts the service if it is running. If it is
+stopped, the change applies on the next start.
 
-**Q: The server crashes immediately after starting!**
+Examples:
 
-**A:** This is almost always an "Out of Memory" (OOM) error. Your GPU does not have enough free VRAM to hold the entire model *and* the context window.
+```bash
+agentio settings set ctx_size 32768
+agentio settings set gpu_layers 24
+agentio settings set flash_attn on
+agentio settings set cache_type_k q8_0
+agentio settings set cache_type_v q8_0
+agentio settings set mlock on
+agentio settings set mmap off
+agentio settings unset tensor_split
+```
 
--   **Solution:** Use the `[gpu_layers]` parameter to offload fewer layers to the GPU. For an RTX 4060, a value of `24` is a great starting point: `agentio start your_model.gguf 4096 24`.
+Available presets:
 
--   **Check Logs:** You can see the exact error message by viewing the log file:
-    ```bash
-    cat ~/.agentio/server.log
-    ```
+```bash
+agentio settings preset balanced
+agentio settings preset throughput
+agentio settings preset low-vram
+agentio settings preset cpu
+```
 
-## License
+The named settings cover model loading, CPU/GPU offload, batching, KV cache,
+Flash Attention, memory mapping/locking, NUMA, continuous batching, unified KV,
+SWA, operation offload, polling, CPU affinity, priority, and defragmentation.
 
-This script is released under the MIT License.
+Because `llama.cpp` adds flags frequently, AgentIO also exposes the complete
+installed server help and supports persistent arbitrary arguments:
+
+```bash
+agentio settings flags
+agentio settings extra set --metrics --no-webui
+agentio settings extra add --some-new-llama-flag value
+agentio settings extra clear
+```
+
+`extra set` replaces the arbitrary argument list; `extra add` appends to it.
+Use separate shell arguments exactly as they should be passed to
+`llama-server`.
+
+Reset performance settings to defaults while keeping the selected model:
+
+```bash
+agentio settings reset
+```
+
+## Service commands
+
+```bash
+agentio start
+agentio status
+agentio logs
+agentio stop
+```
+
+The default endpoint is `http://127.0.0.1:8080`. Change `host`, `port`, or
+`api_key` through `agentio settings set` when needed. The API key is stored in a
+user-only configuration file and is hidden in `agentio settings` output.
