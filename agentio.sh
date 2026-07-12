@@ -90,6 +90,11 @@ load_settings() {
         # shellcheck disable=SC1090
         source "$CONFIG_FILE"
     fi
+    # Older AgentIO versions serialized an empty array as one empty argument.
+    # Normalize it so llama-server never receives a trailing blank argument.
+    if [ "${#EXTRA_ARGS[@]}" -eq 1 ] && [ -z "${EXTRA_ARGS[0]}" ]; then
+        EXTRA_ARGS=()
+    fi
 }
 
 write_assignment() {
@@ -155,7 +160,11 @@ save_settings() {
         write_assignment CACHE_PROMPT "$CACHE_PROMPT"
         write_assignment CACHE_REUSE "$CACHE_REUSE"
         write_assignment THREADS_HTTP "$THREADS_HTTP"
-        printf 'EXTRA_ARGS=('; printf ' %q' "${EXTRA_ARGS[@]}"; echo ' )'
+        printf 'EXTRA_ARGS=('
+        if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
+            printf ' %q' "${EXTRA_ARGS[@]}"
+        fi
+        echo ' )'
     } > "$tmp"
     chmod 600 "$tmp"
     mv "$tmp" "$CONFIG_FILE"
@@ -352,16 +361,21 @@ start_server() {
         ok "Server is running at http://$HOST:$PORT with $MODEL."
     else
         systemctl --user status "$SERVICE_NAME" --no-pager
+        systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+        systemctl --user reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
         die "The server exited during startup."
     fi
 }
 
 stop_server() {
-    if systemctl --user is-active --quiet "$SERVICE_NAME"; then
-        systemctl --user disable --now "$SERVICE_NAME" >/dev/null
-        ok "Server stopped."
+    local state
+    state="$(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || true)"
+    systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl --user reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+    if [ "$state" = inactive ] || [ "$state" = unknown ]; then
+        warn "Server was already stopped; its autostart is disabled."
     else
-        warn "Server is already stopped."
+        ok "Server stopped and its restart loop was disabled."
     fi
 }
 
@@ -548,7 +562,7 @@ AgentIO settings ($CONFIG_FILE)
   cache idle slots $CACHE_IDLE_SLOTS
   cache prompt     $CACHE_PROMPT
   HTTP threads     $THREADS_HTTP (0 = llama.cpp default)
-  extra args       ${EXTRA_ARGS[*]:-<none>}
+  extra args       $([ "${#EXTRA_ARGS[@]}" -gt 0 ] && printf '%s' "${EXTRA_ARGS[*]}" || echo '<none>')
 
 Change one:  agentio settings set <key> <value>
 Disable one: agentio settings set <boolean-key> off
