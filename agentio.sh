@@ -200,8 +200,8 @@ install_dependencies() {
     detect_os
     info "Installing dependencies for $OS..."
     case "$OS" in
-        arch|manjaro) sudo pacman -S --needed git cmake make gcc curl wget cuda base-devel ;;
-        ubuntu|debian|pop) sudo apt-get update && sudo apt-get install -y build-essential cmake git curl wget nvidia-cuda-toolkit ;;
+        arch|manjaro) sudo pacman -S --needed git cmake make gcc curl wget cuda base-devel npm ;;
+        ubuntu|debian|pop) sudo apt-get update && sudo apt-get install -y build-essential cmake git curl wget nvidia-cuda-toolkit npm ;;
         *) die "Unsupported distribution '$OS'. Install Git, CMake, a C++ compiler, curl/wget, and optionally CUDA manually." ;;
     esac
 }
