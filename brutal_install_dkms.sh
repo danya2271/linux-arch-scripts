@@ -13,6 +13,22 @@ DKMS_MODULE_NAME="tcp-brutal"
 KERNEL_MODULE_NAME="brutal"
 REPO_URL="https://github.com/apernet/tcp-brutal"
 HY2_API_BASE_URL="https://api.hy2.io/v1"
+INSTALL_LOCK_FILE="${TCP_BRUTAL_INSTALL_LOCK_FILE:-/run/lock/tcp-brutal-install.lock}"
+INSTALL_LOCK_TIMEOUT="${TCP_BRUTAL_INSTALL_LOCK_TIMEOUT:-300}"
+CURL_FLAGS=(
+    --silent
+    --show-error
+    --fail
+    --location
+    --connect-timeout 15
+    --max-time 300
+    --retry 5
+    --retry-delay 2
+)
+
+INSTALL_LOCK_FD=""
+TMP_TARBALL=""
+EXTRACT_DIR=""
 
 ### Logger
 # FIXED: Redirect all logs to stderr (>&2) so they don't pollute variable capturing
@@ -24,6 +40,43 @@ err() { echo -e "[ERROR] $1" >&2; exit 1; }
 if [[ "$EUID" -ne 0 ]]; then
     err "This script must be run as root. Please run with sudo or as the root user."
 fi
+
+### Cleanup
+cleanup() {
+    local exit_status=$?
+
+    [[ -z "$EXTRACT_DIR" ]] || rm -rf -- "$EXTRACT_DIR" || true
+    [[ -z "$TMP_TARBALL" ]] || rm -f -- "$TMP_TARBALL" || true
+
+    if [[ -n "$INSTALL_LOCK_FD" ]]; then
+        flock --unlock "$INSTALL_LOCK_FD" 2>/dev/null || true
+        exec {INSTALL_LOCK_FD}>&-
+    fi
+
+    return "$exit_status"
+}
+
+trap cleanup EXIT
+
+### Locking
+acquire_install_lock() {
+    if ! command -v flock >/dev/null 2>&1; then
+        err "The 'flock' command is required to safely run this installer."
+    fi
+
+    if [[ ! "$INSTALL_LOCK_TIMEOUT" =~ ^[0-9]+$ ]]; then
+        err "TCP_BRUTAL_INSTALL_LOCK_TIMEOUT must be a non-negative integer."
+    fi
+
+    if ! exec {INSTALL_LOCK_FD}>>"$INSTALL_LOCK_FILE"; then
+        err "Failed to open installer lock file ${INSTALL_LOCK_FILE}."
+    fi
+
+    log "Acquiring the tcp-brutal installer lock..."
+    if ! flock --exclusive --wait "$INSTALL_LOCK_TIMEOUT" "$INSTALL_LOCK_FD"; then
+        err "Another tcp-brutal installation is still running (waited ${INSTALL_LOCK_TIMEOUT}s)."
+    fi
+}
 
 ### OS & Dependency Check
 install_dependencies() {
@@ -64,7 +117,7 @@ get_latest_version() {
     local api_url="${HY2_API_BASE_URL}/update?cver=installscript&arch=generic&plat=linux&chan=tcp-brutal"
 
     local version
-    version=$(curl -sS "$api_url" | grep -oP '"lver":\s*\K"v.*?"' | head -1 | tr -d '"')
+    version=$(curl "${CURL_FLAGS[@]}" "$api_url" | grep -oP '"lver":\s*\K"v.*?"' | head -1 | tr -d '"')
 
     if [[ -z "$version" ]]; then
         err "Failed to get the latest version from API. Check your network."
@@ -77,14 +130,10 @@ get_latest_version() {
 install_dkms_module() {
     local version="$1"
     local tarball_url="${REPO_URL}/releases/download/${version}/tcp-brutal.dkms.tar.gz"
-    local tmp_tarball
-    tmp_tarball=$(mktemp --suffix=".tar.gz")
-
-    # Ensure temporary file is cleaned up on exit
-    trap 'rm -f "$tmp_tarball"' EXIT
+    TMP_TARBALL=$(mktemp --suffix=".tar.gz")
 
     log "Downloading version ${version} from ${tarball_url}..."
-    curl -sSL -f --retry 5 "$tarball_url" -o "$tmp_tarball"
+    curl "${CURL_FLAGS[@]}" "$tarball_url" -o "$TMP_TARBALL"
 
     log "Cleaning up old DKMS installations of ${DKMS_MODULE_NAME}..."
     if dkms status -m "$DKMS_MODULE_NAME" | grep -q "$DKMS_MODULE_NAME"; then
@@ -92,23 +141,25 @@ install_dkms_module() {
     fi
 
     log "Extracting and registering DKMS module..."
-    local extract_dir
-    extract_dir=$(mktemp -d)
-    tar xf "$tmp_tarball" -C "$extract_dir"
+    EXTRACT_DIR=$(mktemp -d)
+    tar xf "$TMP_TARBALL" -C "$EXTRACT_DIR"
 
     # Read variables from dkms.conf (PACKAGE_NAME, PACKAGE_VERSION)
-    source "${extract_dir}/dkms_source_tree/dkms.conf"
+    # shellcheck source=/dev/null
+    source "${EXTRACT_DIR}/dkms_source_tree/dkms.conf"
 
     if [[ -z "$PACKAGE_NAME" || -z "$PACKAGE_VERSION" ]]; then
-        rm -rf "$extract_dir"
         err "Malformed DKMS tarball."
     fi
 
     local src_dir="/usr/src/${PACKAGE_NAME}-${PACKAGE_VERSION}"
     rm -rf "$src_dir"
     mkdir -p "$src_dir"
-    cp -a "${extract_dir}/dkms_source_tree/." "$src_dir/"
-    rm -rf "$extract_dir"
+    cp -a "${EXTRACT_DIR}/dkms_source_tree/." "$src_dir/"
+    rm -rf "$EXTRACT_DIR"
+    EXTRACT_DIR=""
+    rm -f "$TMP_TARBALL"
+    TMP_TARBALL=""
 
     log "Building and installing via DKMS..."
     dkms add "$PACKAGE_NAME/$PACKAGE_VERSION"
@@ -135,6 +186,7 @@ load_kernel_module() {
 
 ### Main Execution
 main() {
+    acquire_install_lock
     install_dependencies
 
     if [[ ! -d "/lib/modules/$(uname -r)/build" ]]; then
