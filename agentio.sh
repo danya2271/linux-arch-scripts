@@ -282,6 +282,25 @@ get_quantize_binary() {
     return 1
 }
 
+ensure_user_linger() {
+    local user linger
+    command -v loginctl >/dev/null 2>&1 ||
+        die "loginctl was not found; AgentIO needs systemd user lingering to stay running after logout."
+
+    user="$(id -un)" || die "Could not determine the current user."
+    linger="$(loginctl show-user "$user" -p Linger --value 2>/dev/null || true)"
+    [ "$linger" = yes ] && return
+
+    info "Enabling systemd user lingering so AgentIO stays running after logout..."
+    sudo loginctl enable-linger "$user" ||
+        die "Could not enable user lingering. Run 'sudo loginctl enable-linger $user', then try again."
+
+    linger="$(loginctl show-user "$user" -p Linger --value 2>/dev/null || true)"
+    [ "$linger" = yes ] ||
+        die "User lingering is still disabled. Run 'sudo loginctl enable-linger $user', then try again."
+    ok "Systemd user lingering enabled."
+}
+
 find_models() {
     find "$MODELS_DIR" -type f -iname '*.gguf' -not -name '*.part' -printf '%P\0' 2>/dev/null | sort -z -f
 }
@@ -384,7 +403,7 @@ write_service_files() {
         echo 'Type=simple'
         echo 'Environment="PATH=/opt/cuda/bin:/usr/local/bin:/usr/bin:/bin"'
         printf 'ExecStart=%s\n' "$LAUNCHER_FILE"
-        echo 'Restart=on-failure'
+        echo 'Restart=always'
         echo 'RestartSec=3'
         echo 'StandardOutput=journal'
         echo 'StandardError=journal'
@@ -404,6 +423,7 @@ start_server() {
         warn "Saved '$MODEL' as the selected model. Future starts need no arguments."
     fi
     [ -n "$MODEL" ] || { list_models; die "No model selected. Use 'agentio settings set model <name.gguf>'."; }
+    ensure_user_linger
     write_service_files
     systemctl --user enable "$SERVICE_NAME" >/dev/null || die "Could not enable the user service."
     systemctl --user restart "$SERVICE_NAME" || die "The service failed to start. Run 'agentio status' or 'agentio logs'."

@@ -260,3 +260,9 @@ The default endpoint is `http://127.0.0.1:8080`. Settings live in
 `~/.config/agentio/settings.conf`; the generated launcher and user systemd unit
 are regenerated whenever configuration changes. A running service is restarted
 automatically. Stopped services receive the new settings on the next start.
+
+On the first start, AgentIO enables systemd user lingering (with `sudo`) so the
+user service remains managed after the last login session ends. It also restarts
+`llama-server` after either a failure or a clean unexpected exit. `agentio stop`
+still stops and disables AgentIO explicitly; it leaves lingering enabled because
+that setting is shared by all of the user's systemd services.
