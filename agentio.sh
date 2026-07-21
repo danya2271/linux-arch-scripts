@@ -189,11 +189,43 @@ save_settings() {
 
 detect_os() {
     OS=""
+    OS_LIKE=""
     if [ -f /etc/os-release ]; then
         # shellcheck disable=SC1091
         . /etc/os-release
         OS="$ID"
+        OS_LIKE="${ID_LIKE:-}"
     fi
+
+    # Arch and Debian derivatives commonly use their own ID while retaining
+    # the parent distribution's package manager in ID_LIKE.
+    case "$OS" in
+        arch|manjaro|ubuntu|debian|pop) ;;
+        *)
+            case " $OS_LIKE " in
+                *" arch "*) OS="arch" ;;
+                *" debian "*|*" ubuntu "*) OS="debian" ;;
+            esac ;;
+    esac
+}
+
+cuda_is_available() {
+    [ -x /opt/cuda/bin/nvcc ] || command -v nvcc >/dev/null 2>&1
+}
+
+add_cmp_cuda_flags() {
+    local -n flags_ref="$1"
+
+    # CMP mining cards can have intentionally throttled DP4A/FMA integer
+    # paths. NO_DP4A is honored by compatible forks; -fmad=false provides
+    # the compiler-level bypass used by other llama.cpp builds.
+    flags_ref+=("-DCMAKE_CUDA_FLAGS=-fmad=false -DNO_DP4A")
+}
+
+describe_build_profile() {
+    case "$1" in
+        cmp) info "CMP compatibility profile enabled (NO_DP4A, -fmad=false)." ;;
+    esac
 }
 
 install_dependencies() {
@@ -207,6 +239,7 @@ install_dependencies() {
 }
 
 build_llamacpp() {
+    local build_profile="${1:-standard}"
     detect_os
     info "Updating llama.cpp + TurboQuant from $LLAMA_REPO..."
     if [ ! -d "$LLAMA_DIR/.git" ]; then
@@ -236,11 +269,20 @@ build_llamacpp() {
     fi
 
     local cmake_flags=()
-    if [ -x /opt/cuda/bin/nvcc ] || command -v nvcc >/dev/null 2>&1; then
+    if cuda_is_available; then
         ok "NVIDIA CUDA detected; enabling GPU acceleration."
         cmake_flags+=(-DGGML_CUDA=ON)
+        if [ "$build_profile" = cmp ]; then
+            add_cmp_cuda_flags cmake_flags
+            describe_build_profile "$build_profile"
+        else
+            # Do not retain CMP flags from a previous installcomp invocation
+            # in CMake's cache when returning to the standard build.
+            cmake_flags+=("-DCMAKE_CUDA_FLAGS=")
+        fi
         [ -d /opt/cuda/bin ] && export PATH="/opt/cuda/bin:$PATH"
     else
+        [ "$build_profile" != cmp ] || die "The CMP build requires NVIDIA CUDA, but nvcc was not found."
         warn "CUDA was not detected; building for CPU only."
     fi
     cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -DCMAKE_BUILD_TYPE=Release "${cmake_flags[@]}" || exit 1
@@ -249,15 +291,20 @@ build_llamacpp() {
 }
 
 setup() {
+    local build_profile="${1:-standard}"
     if [ "$0" != /usr/local/bin/agentio ]; then
         info "Installing AgentIO as /usr/local/bin/agentio..."
         sudo install -m 0755 "$0" /usr/local/bin/agentio || exit 1
     fi
     install_dependencies
-    build_llamacpp
+    build_llamacpp "$build_profile"
     load_settings
     save_settings
-    ok "Setup complete. Configure it with: agentio settings"
+    if [ "$build_profile" = cmp ]; then
+        ok "CMP-optimized setup complete. Configure it with: agentio settings"
+    else
+        ok "Setup complete. Configure it with: agentio settings"
+    fi
 }
 
 get_server_binary() {
@@ -906,6 +953,7 @@ AgentIO - llama.cpp + TurboQuant local LLM manager
 
 Commands:
   install | update                         Install/update the TurboQuant fork
+  installcomp                              Install/update with CMP GPU throttle bypass flags
   download <url> <name.gguf>               Download a model safely (resumable)
   quantize <input> <output> <tq4|tq3>      Create a TurboQuant weight GGUF
   list                                     List every downloaded GGUF model
@@ -937,6 +985,7 @@ case "${1:-help}" in help|-h|--help) ;; *) ensure_dirs ;; esac
 
 case "${1:-help}" in
     install|setup|update) setup ;;
+    installcomp) setup cmp ;;
     download) download_model "${2:-}" "${3:-}" ;;
     quantize) quantize_model "${2:-}" "${3:-}" "${4:-}" ;;
     start) start_server "${2:-}" ;;

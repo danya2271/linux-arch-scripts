@@ -24,6 +24,19 @@ This installs `/usr/local/bin/agentio`, clones the TurboQuant fork into
 `~/.agentio/llama.cpp`, and builds `llama-server` with CUDA when `nvcc` is
 available. Without CUDA it builds the CPU backend.
 
+NVIDIA CMP cards (including CMP 30HX, 40HX, 50HX, 70HX, and 90HX) can use the
+CMP compatibility build instead:
+
+```bash
+./agentio.sh installcomp
+```
+
+`installcomp` requires CUDA and builds the same TurboQuant fork with
+`NO_DP4A` and NVCC `-fmad=false`. These flags bypass the affected integer/FMA
+paths on CMP hardware while leaving CMake free to select the installed GPU's
+architecture, so the command is not restricted to CMP 50HX. On ordinary
+GeForce, Quadro, or Tesla cards, use the standard `install` command.
+
 If an older AgentIO install has upstream llama.cpp in that directory,
 `agentio update` changes its origin and cleanly switches it to the TurboQuant
 branch. Migration stops instead of overwriting local changes inside the
